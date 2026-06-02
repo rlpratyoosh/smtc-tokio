@@ -1,14 +1,25 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
+use windows::Media;
+use std::sync::Mutex;
+
+pub enum WindowsMediaEvent {
+    Play,
+    Pause,
+    Next,
+    Previous,
+    Stop,
+    Record,
+    FastForward,
+    Rewind,
+    ChannelUp,
+    ChannelDown,
+}
+
+pub struct WindowsMediaManager {
+    event_rx: Option<Mutex<WindowsMediaEvent>>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
 }
