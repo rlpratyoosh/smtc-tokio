@@ -1,7 +1,6 @@
-use windows::{Media, Win32};
-use std::{sync::Mutex, thread};
+use windows::{Foundation::TypedEventHandler, Media, Win32};
+use std::{sync::Mutex};
 use tokio::sync::mpsc;
-use windows_strings::PCWSTR;
 
 pub enum WindowsMediaEvent {
     Play,
@@ -9,52 +8,62 @@ pub enum WindowsMediaEvent {
     Next,
     Previous,
     Stop,
-    Record,
-    FastForward,
-    Rewind,
-    ChannelUp,
-    ChannelDown,
 }
 
 pub struct WindowsMediaManager {
+    _media_player: Media::Playback::MediaPlayer,
     event_rx: Mutex<Option<mpsc::UnboundedReceiver<WindowsMediaEvent>>>,
 }
 
-unsafe extern "system" fn wndproc(hwnd: Win32::Foundation::HWND, msg: u32, wparam: Win32::Foundation::WPARAM, lparam: Win32::Foundation::LPARAM) -> Win32::Foundation::LRESULT {
-    unsafe { Win32::UI::WindowsAndMessaging::DefWindowProcA(hwnd, msg, wparam, lparam) }
-}
-
 impl WindowsMediaManager {
-    pub fn new(class_name: String) -> Self {
-        let (event_tx, mut event_rx) = mpsc::unbounded_channel::<WindowsMediaEvent>();
-        let class_name = format!("{}-smtc", class_name);
-        let mut class_name: Vec<u16> = class_name.encode_utf16().collect();
-        class_name.push(0);
+    pub fn new() -> Self {
+        let (event_tx, event_rx) = mpsc::unbounded_channel::<WindowsMediaEvent>();
 
-        thread::spawn(move || {
-            unsafe {
-                // Initialize COM Apartment
-                let _ = Win32::System::WinRT::RoInitialize(Win32::System::WinRT::RO_INIT_TYPE(1));
+        unsafe {
+            let _ = Win32::System::WinRT::RoInitialize(Win32::System::WinRT::RO_INIT_TYPE(1));
+        }
 
-                // Create ghost window blueprint
-                let window = Win32::UI::WindowsAndMessaging::WNDCLASSW {
-                    style: Win32::UI::WindowsAndMessaging::WNDCLASS_STYLES(0),
-                    lpfnWndProc: Some(wndproc),
-                    cbClsExtra: 0,
-                    cbWndExtra: 0,
-                    hInstance: Win32::Foundation::HINSTANCE::from(Win32::System::LibraryLoader::GetModuleHandleW(None).expect("Failed to create hInstance")),
-                    hIcon: Default::default(),
-                    hCursor: Default::default(),
-                    hbrBackground: Default::default(),
-                    lpszMenuName: Default::default(),
-                    lpszClassName: PCWSTR::from_raw(class_name.as_ptr()),
-                };
+        let media_player = Media::Playback::MediaPlayer::new().expect("Failed to create media player");
+        media_player.CommandManager().expect("Failed to get command_manager").SetIsEnabled(false).expect("Failed to set command manager false");
+        let smtc = media_player.SystemMediaTransportControls().expect("Failed to get smtc");
+
+        let _ = smtc.SetIsEnabled(true);
+
+        let _ = smtc.SetIsPlayEnabled(true);
+        let _ = smtc.SetIsPauseEnabled(true);
+        let _ = smtc.SetIsStopEnabled(true);
+        let _ = smtc.SetIsNextEnabled(true);
+        let _ = smtc.SetIsPreviousEnabled(true);
+
+        let _ = smtc.ButtonPressed(&TypedEventHandler::<Media::SystemMediaTransportControls, Media::SystemMediaTransportControlsButtonPressedEventArgs>::new(
+            move |_, args| {
+                if let Some(args) = args.as_ref() {
+                    match args.Button()? {
+                        Media::SystemMediaTransportControlsButton::Play => {
+                            let _ = event_tx.send(WindowsMediaEvent::Play);
+                        },
+                        Media::SystemMediaTransportControlsButton::Pause => {
+                            let _ = event_tx.send(WindowsMediaEvent::Pause);
+                        },
+                        Media::SystemMediaTransportControlsButton::Next => {
+                            let _ = event_tx.send(WindowsMediaEvent::Next);
+                        },
+                        Media::SystemMediaTransportControlsButton::Previous => {
+                            let _ = event_tx.send(WindowsMediaEvent::Previous);
+                        },
+                        Media::SystemMediaTransportControlsButton::Stop => {
+                            let _ = event_tx.send(WindowsMediaEvent::Stop);
+                        },
+                        _ => {}
+                    }
+                }
+                Ok(())
             }
-        });
+        ));
 
-        let event_rx = Mutex::new(Some(event_rx));
         Self {
-            event_rx,
+            _media_player: media_player,
+            event_rx: Mutex::new(Some(event_rx)),
         }
     }
 
@@ -66,5 +75,4 @@ impl WindowsMediaManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 }
