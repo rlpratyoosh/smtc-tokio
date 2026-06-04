@@ -19,10 +19,6 @@ impl WindowsMediaManager {
     pub fn new() -> Self {
         let (event_tx, event_rx) = mpsc::unbounded_channel::<WindowsMediaEvent>();
 
-        unsafe {
-            let _ = Win32::System::WinRT::RoInitialize(Win32::System::WinRT::RO_INIT_TYPE(1));
-        }
-
         let media_player = Media::Playback::MediaPlayer::new().expect("Failed to create media player");
         media_player.CommandManager().expect("Failed to get command_manager").SetIsEnabled(false).expect("Failed to set command manager false");
         let smtc = media_player.SystemMediaTransportControls().expect("Failed to get smtc");
