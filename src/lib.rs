@@ -1,8 +1,46 @@
+//! This library connects your async Rust application (Tokio) to the Windows System Media Transport Controls (SMTC).
+//! It lets you listen for physical media key presses (Play, Pause, Next, Previous) and update the Windows volume flyout
+//! with your currently playing song's info, album art, and progress bar.
+//! 
+//! # Example
+//! 
+//! ```rust,no_run
+//! use tokio;
+//! use smtc_tokio::{WindowsMediaManager, WindowsMediaEvent};
+//! 
+//! #[tokio::main]
+//! async fn main() {
+//!     // Connect to Windows
+//!     let manager = WindowsMediaManager::new().expect("Failed to hook into Windows OS");
+//!     let mut rx = manager.take_event_rx().expect("Failed to get receiver");
+//! 
+//!     // Tell Windows we are playing a song so it routes keys to us
+//!     manager.set_metadata(
+//!         "Never Gonna Give You Up", 
+//!         &["Rick Astley".to_string()], 
+//!         "Whenever You Need Somebody", 
+//!         213000, 
+//!         Some("https://i.insider.com/602ee9ced3ad27001837f2ac?width=1000&format=jpeg&auto=webp".to_string()),
+//!     );
+//!     manager.set_playback_status(true);
+//! 
+//!     // Listen for hardware media keys
+//!     while let Some(event) = rx.recv().await {
+//!         match event {
+//!             WindowsMediaEvent::Play => println!("User pressed play!"),
+//!             WindowsMediaEvent::Pause => println!("User pressed pause!"),
+//!             _ => println!("Other media key pressed"),
+//!         }
+//!     }
+//! }
+//! ```
+
 use windows::{Foundation::{TypedEventHandler, Uri}, Media, Storage::Streams::RandomAccessStreamReference, Win32};
 use windows_strings::HSTRING;
 use std::{sync::Mutex};
 use tokio::sync::mpsc;
 
+/// Events that come from Windows when the user presses media keys.
 pub enum WindowsMediaEvent {
     Play,
     Pause,
@@ -11,7 +49,9 @@ pub enum WindowsMediaEvent {
     Stop,
 }
 
+/// Commands we send from our app back to Windows to update the media popup.
 pub enum WindowsMediaCommand {
+    /// Updates the song details (title, artist, album, duration, and optional album art).
     SetMetadata {
         title: String,
         artists: Vec<String>,
@@ -19,11 +59,18 @@ pub enum WindowsMediaCommand {
         duration: u64,
         art_url: Option<String>,
     },
-    SetPlaybackStatus(bool), // true for playing false for paused
-    SetPosition(u64, u64), // Song duration, Position (in millis)
+    /// Tells Windows if the music is currently playing (`true`) or paused (`false`).
+    SetPlaybackStatus(bool),
+    /// Updates the progress bar. Takes the total duration and current position in milliseconds.
+    SetPosition(u64, u64),
+    /// Tells Windows the music has completely stopped.
     SetStopped,
 }
 
+/// The main manager that keeps the Windows media connection alive in the background.
+/// 
+/// As long as this struct exists, your app will control the Windows media flyout. 
+/// When it gets dropped, the connection is cleanly closed.
 pub struct WindowsMediaManager {
     sta_thread: Option<std::thread::JoinHandle<()>>,
     sta_thread_id: u32,
@@ -60,6 +107,17 @@ impl Drop for WindowsMediaManager {
 }
 
 impl WindowsMediaManager {
+    /// Creates a new media manager and connects to Windows.
+    /// 
+    /// This starts a safe, hidden background thread to talk to the OS. 
+    /// Returns an error if Windows refuses to initialize the media controls.
+    /// 
+    /// # Example
+    /// ```rust,no_run
+    /// use smtc_tokio::WindowsMediaManager;
+    /// 
+    /// let manager = WindowsMediaManager::new().expect("Failed to initialize Windows COM");
+    /// ```
     pub fn new() -> Result<Self, String> {
         let (event_tx, event_rx) = mpsc::unbounded_channel::<WindowsMediaEvent>();
         let (command_tx, command_rx) = std::sync::mpsc::channel::<WindowsMediaCommand>();
@@ -161,6 +219,10 @@ impl WindowsMediaManager {
                         while let Ok(cmd) = command_rx.try_recv() {
                             match cmd {
                                 WindowsMediaCommand::SetMetadata { title, artists, album, duration, art_url } => {
+                                    let _ = smtc.SetPlaybackStatus(Media::MediaPlaybackStatus::Playing);
+                                    if let Ok(smtc_timeline_properties) = WindowsMediaManager::set_smtc_timeline_properties(duration, 0)  {
+                                        let _ = smtc.UpdateTimelineProperties(&smtc_timeline_properties);
+                                    }
                                     if let Ok(smtc_display_updater) = smtc.DisplayUpdater() {
                                         let _ = smtc_display_updater.SetType(Media::MediaPlaybackType::Music);
                                         if let Ok(music_properties) = smtc_display_updater.MusicProperties() {
@@ -169,17 +231,13 @@ impl WindowsMediaManager {
                                             let _ = music_properties.SetAlbumTitle(&HSTRING::from(album));
                                             let _ = music_properties.SetTitle(&HSTRING::from(title));
                                         }
-                                        if let Some(art_url) = art_url {
-                                            if let Ok(uri) = Uri::CreateUri(&HSTRING::from(art_url)){
-                                                if let Ok(random_access_stream_ref) = RandomAccessStreamReference::CreateFromUri(&uri) {
-                                                    let _ = smtc_display_updater.SetThumbnail(&random_access_stream_ref);
-                                                }
-                                            }
+                                        if let Some(art_url) = art_url
+                                            && let Ok(uri) = Uri::CreateUri(&HSTRING::from(art_url))
+                                            && let Ok(random_access_stream_ref) = RandomAccessStreamReference::CreateFromUri(&uri) 
+                                        {
+                                            let _ = smtc_display_updater.SetThumbnail(&random_access_stream_ref);
                                         }
                                         let _ = smtc_display_updater.Update();
-                                    }
-                                    if let Ok(smtc_timeline_properties) = WindowsMediaManager::set_smtc_timeline_properties(duration, 0)  {
-                                        let _ = smtc.UpdateTimelineProperties(&smtc_timeline_properties);
                                     }
                                 },
                                 WindowsMediaCommand::SetPlaybackStatus(playing) => {
@@ -206,10 +264,7 @@ impl WindowsMediaManager {
 
         let sta_thread_id = match id_rx.recv() {
             Ok(msg) => {
-                match msg {
-                    Ok(id) => id,
-                    Err(e) => return Err(e),
-                }
+                msg?
             },
             Err(_) => return Err("Failed to recieve Thread Id".to_string())
         };
@@ -234,10 +289,36 @@ impl WindowsMediaManager {
         Ok(smtc_timeline_properties)
     }
 
+    /// Grabs the receiver channel so you can listen for media key presses in your Tokio loop.
+    /// 
+    /// Note: You can only take this once. If you call it again, it returns `None`.
+    /// 
+    /// # Example
+    /// ```rust,no_run
+    /// use smtc_tokio::WindowsMediaManager;
+    /// 
+    /// let manager = WindowsMediaManager::new().unwrap();
+    /// let mut rx = manager.take_event_rx().expect("I have the channel now");
+    /// ```
     pub fn take_event_rx(&self) -> Option<mpsc::UnboundedReceiver<WindowsMediaEvent>> {
         self.event_rx.lock().ok()?.take()
     }
 
+    /// Updates the song details (title, artist, album, and optional album art) shown in the Windows flyout.
+    /// 
+    /// # Example
+    /// ```rust,no_run
+    /// use smtc_tokio::WindowsMediaManager;
+    /// 
+    /// let manager = WindowsMediaManager::new().unwrap();
+    /// manager.set_metadata(
+    ///     "Attention", 
+    ///     &["Charlie Puth".to_string()], 
+    ///     "Voicenotes", 
+    ///     208000, // Duration in milliseconds
+    ///     None    // URL to an image file or web link
+    /// );
+    /// ```
     pub fn set_metadata( &self, title: &str, artists: &[String], album: &str, duration: u64, art_url: Option<String>) {
         let _ = self.command_tx.send(WindowsMediaCommand::SetMetadata {
             title: title.to_string(),
@@ -249,16 +330,36 @@ impl WindowsMediaManager {
         self.wake_sta_thread();
     }
 
+    /// Tells Windows if the music is currently playing (`true`) or paused (`false`).
+    /// 
+    /// # Example
+    /// ```rust,no_run
+    /// use smtc_tokio::WindowsMediaManager;
+    /// 
+    /// let manager = WindowsMediaManager::new().unwrap();
+    /// manager.set_playback_status(true); // User just pressed Play
+    /// ```
     pub fn set_playback_status(&self, is_playing: bool) {
         let _ = self.command_tx.send(WindowsMediaCommand::SetPlaybackStatus(is_playing));
         self.wake_sta_thread();
     }
 
+    /// Updates the progress bar in the Windows media popup.
+    /// 
+    /// # Example
+    /// ```rust,no_run
+    /// use smtc_tokio::WindowsMediaManager;
+    /// 
+    /// let manager = WindowsMediaManager::new().unwrap();
+    /// // The song is 3 minutes long, and we are exactly 1 minute in
+    /// manager.set_position(180_000, 60_000); 
+    /// ```
     pub fn set_position(&self, duration_ms: u64, position_ms: u64) {
         let _ = self.command_tx.send(WindowsMediaCommand::SetPosition(duration_ms, position_ms));
         self.wake_sta_thread();
     }
 
+    /// Tells Windows that playback has completely stopped, clearing the playing state.
     pub fn set_stopped(&self) {
         let _ = self.command_tx.send(WindowsMediaCommand::SetStopped);
         self.wake_sta_thread();
@@ -279,5 +380,23 @@ impl WindowsMediaManager {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
+    #[tokio::test]
+    async fn test_manager_lifecycle() {
+        let manager = WindowsMediaManager::new().expect("Should initialize successfully on a Windows machine");
+
+        let _rx = manager.take_event_rx().expect("Receiver should be available the first time");
+        assert!(manager.take_event_rx().is_none());
+
+        manager.set_metadata(
+            "Never Gonna Give You Up",
+            &["Rick Astley".to_string()],
+            "Whenever You Need Somebody",
+            213000, 
+            None,
+        );
+
+        manager.set_playback_status(true);
+    }
 }
