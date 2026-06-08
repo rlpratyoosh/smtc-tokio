@@ -47,6 +47,9 @@ pub enum WindowsMediaEvent {
     Next,
     Previous,
     Stop,
+    /// Fired when the user clicks or drags the timeline slider. 
+    /// Returns the requested position in milliseconds.
+    SetPosition(u64),
 }
 
 /// Commands we send from our app back to Windows to update the media popup.
@@ -61,8 +64,8 @@ pub enum WindowsMediaCommand {
     },
     /// Tells Windows if the music is currently playing (`true`) or paused (`false`).
     SetPlaybackStatus(bool),
-    /// Updates the progress bar. Takes the total duration and current position in milliseconds.
-    SetPosition(u64, u64),
+    /// Updates the progress bar. Takes the current position in milliseconds.
+    SetPosition(u64),
     /// Tells Windows the music has completely stopped.
     SetStopped,
 }
@@ -176,24 +179,25 @@ impl WindowsMediaManager {
                 return;
             };
 
+            let button_pressed_tx = event_tx.clone();
             let Ok(_) = smtc.ButtonPressed(&TypedEventHandler::<Media::SystemMediaTransportControls, Media::SystemMediaTransportControlsButtonPressedEventArgs>::new(
                 move |_, args| {
                     if let Some(args) = args.as_ref() {
                         match args.Button()? {
                             Media::SystemMediaTransportControlsButton::Play => {
-                                let _ = event_tx.send(WindowsMediaEvent::Play);
+                                let _ = button_pressed_tx.send(WindowsMediaEvent::Play);
                             },
                             Media::SystemMediaTransportControlsButton::Pause => {
-                                let _ = event_tx.send(WindowsMediaEvent::Pause);
+                                let _ = button_pressed_tx.send(WindowsMediaEvent::Pause);
                             },
                             Media::SystemMediaTransportControlsButton::Next => {
-                                let _ = event_tx.send(WindowsMediaEvent::Next);
+                                let _ = button_pressed_tx.send(WindowsMediaEvent::Next);
                             },
                             Media::SystemMediaTransportControlsButton::Previous => {
-                                let _ = event_tx.send(WindowsMediaEvent::Previous);
+                                let _ = button_pressed_tx.send(WindowsMediaEvent::Previous);
                             },
                             Media::SystemMediaTransportControlsButton::Stop => {
-                                let _ = event_tx.send(WindowsMediaEvent::Stop);
+                                let _ = button_pressed_tx.send(WindowsMediaEvent::Stop);
                             },
                             _ => {}
                         }
@@ -205,6 +209,20 @@ impl WindowsMediaManager {
                 return;
             };
 
+            let playback_position_tx = event_tx.clone();
+            let _ = smtc.PlaybackPositionChangeRequested(&TypedEventHandler::<Media::SystemMediaTransportControls, Media::PlaybackPositionChangeRequestedEventArgs>::new(
+                move |_, args| {
+                    if let Some(args) = args.as_ref() {
+                        let time = args.RequestedPlaybackPosition()?;
+                        // We must register this PlaybackPositionChangeRequested listener.
+                        // Even if we don't actively use the event, Windows requires this listener to be present
+                        // to implicitly derive that our app supports seeking, which forces the OS to draw the timeline slider.
+                        let _ = playback_position_tx.send(WindowsMediaEvent::SetPosition((time.Duration / 10000) as u64));
+                    }
+                    Ok(())
+                }
+            ));
+
             unsafe {
                 let mut msg = Win32::UI::WindowsAndMessaging::MSG::default();
                 let _ = Win32::UI::WindowsAndMessaging::PeekMessageW( &mut msg, None, 0, 0, Win32::UI::WindowsAndMessaging::PM_NOREMOVE,);
@@ -212,6 +230,7 @@ impl WindowsMediaManager {
 
             let _ = id_tx.send(Ok( unsafe { Win32::System::Threading::GetCurrentThreadId() }));
 
+            let mut cur_dur: u64 = 0;
             unsafe {
                 let mut msg = Win32::UI::WindowsAndMessaging::MSG::default();
                 while Win32::UI::WindowsAndMessaging::GetMessageW(&mut msg, None, 0, 0).as_bool() {
@@ -219,7 +238,7 @@ impl WindowsMediaManager {
                         while let Ok(cmd) = command_rx.try_recv() {
                             match cmd {
                                 WindowsMediaCommand::SetMetadata { title, artists, album, duration, art_url } => {
-                                    let _ = smtc.SetPlaybackStatus(Media::MediaPlaybackStatus::Playing);
+                                    cur_dur = duration;
                                     if let Ok(smtc_timeline_properties) = WindowsMediaManager::set_smtc_timeline_properties(duration, 0)  {
                                         let _ = smtc.UpdateTimelineProperties(&smtc_timeline_properties);
                                     }
@@ -245,8 +264,8 @@ impl WindowsMediaManager {
                                         smtc.SetPlaybackStatus(Media::MediaPlaybackStatus::Paused)
                                     };
                                 },
-                                WindowsMediaCommand::SetPosition(dur, pos) => {
-                                    if let Ok(smtc_timeline_properties) = WindowsMediaManager::set_smtc_timeline_properties(dur, pos)  {
+                                WindowsMediaCommand::SetPosition(pos) => {
+                                    if let Ok(smtc_timeline_properties) = WindowsMediaManager::set_smtc_timeline_properties(cur_dur, pos)  {
                                         let _ = smtc.UpdateTimelineProperties(&smtc_timeline_properties);
                                     }
                                 },
@@ -352,10 +371,10 @@ impl WindowsMediaManager {
     /// 
     /// let manager = WindowsMediaManager::new().unwrap();
     /// // The song is 3 minutes long, and we are exactly 1 minute in
-    /// manager.set_position(180_000, 60_000); 
+    /// manager.set_position(60_000); 
     /// ```
-    pub fn set_position(&self, duration_ms: u64, position_ms: u64) {
-        let _ = self.command_tx.send(WindowsMediaCommand::SetPosition(duration_ms, position_ms));
+    pub fn set_position(&self, position_ms: u64) {
+        let _ = self.command_tx.send(WindowsMediaCommand::SetPosition(position_ms));
         self.wake_sta_thread();
     }
 
