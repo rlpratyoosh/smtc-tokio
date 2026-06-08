@@ -1,9 +1,20 @@
 [package]
 name = "smtc-tokio"
 version = "0.1.0"
+authors = ["rlpratyoosh <pratyoosh.prakash.dev@gmail.com>"]
 edition = "2024"
+description = "A simple, thread-safe library that connects your async Rust application (tokio) to the Windows System Media Transport Controls (SMTC)."
+readme = "README.md"
+repository = "https://github.com/rlpratyoosh/smtc-tokio"
+homepage = "https://github.com/rlpratyoosh/smtc-tokio"
+license = "MIT"
+keywords = ["windows", "media", "smtc", "tokio", "async"]
+categories = ["os::windows-apis", "asynchronous", "multimedia"]
+exclude = [
+    ".gitignore",
+]
 
 [dependencies]
 windows = { version = "0.62.2", features = ["Media", "Media_Playback","Win32_Foundation", "Win32_System_WinRT", "Win32_System_Threading", "Win32_UI_WindowsAndMessaging", "Foundation", "Storage_Streams"] }
 windows-strings = "0.5.1"
-tokio = { version = "1.52.3", features = ["sync", "macros", "rt-multi-thread", "time"] }
+tokio = { version = "1.52.3", features = ["sync", "macros", "rt-multi-thread"] }
