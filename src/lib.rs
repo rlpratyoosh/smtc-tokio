@@ -35,6 +35,9 @@
 //! }
 //! ```
 
+#[cfg(not(windows))]
+compile_error!("smtc-tokio is only supported on Windows.");
+
 use windows::{Foundation::{TypedEventHandler, Uri}, Media, Storage::Streams::RandomAccessStreamReference, Win32};
 use windows_strings::HSTRING;
 use std::{sync::Mutex};

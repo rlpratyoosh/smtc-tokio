@@ -2,7 +2,7 @@
 
 # smtc-tokio
 
-[![Version](https://img.shields.io/badge/version-0.1.0-blue.svg)](https://github.com/rlpratyoosh/smtc-tokio)
+[![Version](https://img.shields.io/badge/version-0.1.1-blue.svg)](https://github.com/rlpratyoosh/smtc-tokio)
 [![Language](https://img.shields.io/badge/language-Rust-orange.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
@@ -23,9 +23,8 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-smtc-tokio = "0.1.0"
+smtc-tokio = "0.1.1"
 tokio = { version = "1", features = ["full"] }
-
 ```
 
 ## Quick Start
